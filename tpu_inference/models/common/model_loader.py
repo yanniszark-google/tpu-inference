@@ -115,6 +115,7 @@ def _get_nnx_model(
         Returns:
             The jitted model.
         """
+        print("use_qwix_on_abstract_model: ", use_qwix_on_abstract_model)
         state = nnx.state(model)
         nnx.update(model, state)
         if not use_qwix_on_abstract_model:
@@ -294,21 +295,72 @@ def get_flax_model(
         # Compile with ShapeDtypeStruct for state to infer layouts
         compiled = run_model_base.lower(graphdef, state_shapes, *args).compile()
 
-        dll_auto_decided_layout = compiled.input_formats[0][1]
-        print("dll_auto_decided_layout for state['embedder']['input_embedding_table_VD']: ",  dll_auto_decided_layout['embedder']['input_embedding_table_VD'])
-        print("dll_auto_decided_layout['embedder']['input_embedding_table_VD']: ", dll_auto_decided_layout['embedder']['input_embedding_table_VD'])
-        compiled_apply_layout = jax.jit(apply_layout, in_shardings=(state_shardings_default_layout,), out_shardings=dll_auto_decided_layout).lower(state_shapes).compile()
-        state_with_dll_auto_decided_layout = compiled_apply_layout(state)
+        original_layout = state_shardings_default_layout['embedder']['input_embedding_table_VD']
+        dll_auto_decided_layout = compiled.input_formats[0][1]['embedder']['input_embedding_table_VD']
+        shape = state_shapes['embedder']['input_embedding_table_VD']
+        compiled_apply_layout = jax.jit(apply_layout, in_shardings=(original_layout,), out_shardings=dll_auto_decided_layout).lower(shape).compile()
+        shape_with_dll_auto_decided_layout = compiled_apply_layout(state['embedder']['input_embedding_table_VD'])
+        state['embedder']['input_embedding_table_VD'] = shape_with_dll_auto_decided_layout
         # ForkedPdb().set_trace()
-        print("apply_layout output format for state['embedder']['input_embedding_table_VD']: ", compiled_apply_layout.output_formats['embedder']['input_embedding_table_VD'].layout)
-        print("state_with_dll_auto_decided_layout['embedder']['input_embedding_table_VD'].format: ", state_with_dll_auto_decided_layout['embedder']['input_embedding_table_VD'].format)
-        # ForkedPdb().set_trace()
+        print("dll_auto_decided_layout for state['embedder']['input_embedding_table_VD']: ",  dll_auto_decided_layout)
+        print("apply_layout output format for state['embedder']['input_embedding_table_VD']: ", compiled_apply_layout.output_formats.layout)
+        print("shape_with_dll_auto_decided_layout: ", shape_with_dll_auto_decided_layout.format)
         
+        original_layout = state_shardings_default_layout['layers'][0]['custom_module']['mlp1_bias_EF2']
+        dll_auto_decided_layout = compiled.input_formats[0][1]['layers'][0]['custom_module']['mlp1_bias_EF2']
+        shape = state_shapes['layers'][0]['custom_module']['mlp1_bias_EF2']
+        compiled_apply_layout = jax.jit(apply_layout, in_shardings=(original_layout,), out_shardings=dll_auto_decided_layout).lower(shape).compile()
+        shape_with_dll_auto_decided_layout = compiled_apply_layout(state['layers'][0]['custom_module']['mlp1_bias_EF2'])
+        state['layers'][0]['custom_module']['mlp1_bias_EF2'] = shape_with_dll_auto_decided_layout
+
+        original_layout = state_shardings_default_layout['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['qvalue']
+        dll_auto_decided_layout = compiled.input_formats[0][1]['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['qvalue']
+        shape = state_shapes['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['qvalue']
+        compiled_apply_layout = jax.jit(apply_layout, in_shardings=(original_layout,), out_shardings=dll_auto_decided_layout).lower(shape).compile()
+        shape_with_dll_auto_decided_layout = compiled_apply_layout(state['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['qvalue'])
+        state['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['qvalue'] = shape_with_dll_auto_decided_layout
+
+        original_layout = state_shardings_default_layout['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['scale']
+        dll_auto_decided_layout = compiled.input_formats[0][1]['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['scale']
+        shape = state_shapes['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['scale']
+        compiled_apply_layout = jax.jit(apply_layout, in_shardings=(original_layout,), out_shardings=dll_auto_decided_layout).lower(shape).compile()
+        shape_with_dll_auto_decided_layout = compiled_apply_layout(state['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['scale'])
+        state['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['scale'] = shape_with_dll_auto_decided_layout
+
+        original_layout = state_shardings_default_layout['layers'][1]['custom_module']['mlp1_bias_EF2']
+        dll_auto_decided_layout = compiled.input_formats[0][1]['layers'][1]['custom_module']['mlp1_bias_EF2']
+        shape = state_shapes['layers'][1]['custom_module']['mlp1_bias_EF2']
+        compiled_apply_layout = jax.jit(apply_layout, in_shardings=(original_layout,), out_shardings=dll_auto_decided_layout).lower(shape).compile()
+        shape_with_dll_auto_decided_layout = compiled_apply_layout(state['layers'][1]['custom_module']['mlp1_bias_EF2'])
+        state['layers'][1]['custom_module']['mlp1_bias_EF2'] = shape_with_dll_auto_decided_layout
+
+        original_layout = state_shardings_default_layout['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['qvalue']
+        dll_auto_decided_layout = compiled.input_formats[0][1]['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['qvalue']
+        shape = state_shapes['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['qvalue']
+        compiled_apply_layout = jax.jit(apply_layout, in_shardings=(original_layout,), out_shardings=dll_auto_decided_layout).lower(shape).compile()
+        shape_with_dll_auto_decided_layout = compiled_apply_layout(state['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['qvalue'])
+        state['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['qvalue'] = shape_with_dll_auto_decided_layout
+
+        original_layout = state_shardings_default_layout['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['scale']
+        dll_auto_decided_layout = compiled.input_formats[0][1]['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['scale']
+        shape = state_shapes['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['scale']
+        compiled_apply_layout = jax.jit(apply_layout, in_shardings=(original_layout,), out_shardings=dll_auto_decided_layout).lower(shape).compile()
+        shape_with_dll_auto_decided_layout = compiled_apply_layout(state['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['scale'])
+        state['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['scale'] = shape_with_dll_auto_decided_layout
+
+        original_layout = state_shardings_default_layout['layers'][2]['custom_module']['mlp1_bias_EF2']
+        dll_auto_decided_layout = compiled.input_formats[0][1]['layers'][2]['custom_module']['mlp1_bias_EF2']
+        shape = state_shapes['layers'][2]['custom_module']['mlp1_bias_EF2']
+        compiled_apply_layout = jax.jit(apply_layout, in_shardings=(original_layout,), out_shardings=dll_auto_decided_layout).lower(shape).compile()
+        shape_with_dll_auto_decided_layout = compiled_apply_layout(state['layers'][2]['custom_module']['mlp1_bias_EF2'])
+        state['layers'][2]['custom_module']['mlp1_bias_EF2'] = shape_with_dll_auto_decided_layout
+
+
 
         # Call with real state
         runtime_args = args[:4] + args[5:]  # Exclude static arg at index 6
         
-        return compiled(graphdef, state_with_dll_auto_decided_layout, *runtime_args)
+        return compiled(graphdef, state, *runtime_args)
 
     # @functools.partial(
     #     jax.jit,
