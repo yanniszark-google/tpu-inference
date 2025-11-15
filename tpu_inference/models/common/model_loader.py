@@ -25,6 +25,26 @@ logger = init_logger(__name__)
 _MODEL_REGISTRY = {}
 
 
+import pdb
+import sys
+from typing import Any
+
+
+class ForkedPdb(pdb.Pdb):
+    """
+    PDB Subclass for debugging multi-processed code
+    Suggested in: https://stackoverflow.com/questions/4716533/how-to-attach-debugger-to-a-python-subproccess
+    """
+
+    def interaction(self, *args: Any, **kwargs: Any) -> None:
+        _stdin = sys.stdin
+        try:
+            sys.stdin = open("/dev/stdin")
+            pdb.Pdb.interaction(self, *args, **kwargs)
+        finally:
+            sys.stdin = _stdin
+
+
 class UnsupportedArchitectureError(ValueError):
     """Raised when a model architecture is not supported in the registry."""
     pass
@@ -219,8 +239,25 @@ def get_flax_model(
             return None
         return jax.tree.map(wrap_sharding, state)
     
+    def get_state_shardings_default_layout(state):
+        def wrap_sharding(x):
+            layout, sharding = None, None
+            if hasattr(x, 'layout'):
+                layout = x.layout
+            if hasattr(x, 'sharding'):
+                sharding = x.sharding
+            if layout or sharding:
+                return Format(layout, sharding=sharding)
+            return None
+        return jax.tree.map(wrap_sharding, state)
+
+    def apply_layout(x):
+        return x
+    
     # Preserve the sharding but add Layout.AUTO
     state_shardings = get_state_shardings_with_auto_layout(state)
+    state_shardings_default_layout = get_state_shardings_default_layout(state)
+
     state_shapes = jax.tree.map(
         lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype) if hasattr(x, 'shape') else x,
         state,
@@ -256,10 +293,22 @@ def get_flax_model(
         
         # Compile with ShapeDtypeStruct for state to infer layouts
         compiled = run_model_base.lower(graphdef, state_shapes, *args).compile()
+
+        dll_auto_decided_layout = compiled.input_formats[0][1]
+        print("dll_auto_decided_layout for state['embedder']['input_embedding_table_VD']: ",  dll_auto_decided_layout['embedder']['input_embedding_table_VD'])
+        print("dll_auto_decided_layout['embedder']['input_embedding_table_VD']: ", dll_auto_decided_layout['embedder']['input_embedding_table_VD'])
+        compiled_apply_layout = jax.jit(apply_layout, in_shardings=(state_shardings_default_layout,), out_shardings=dll_auto_decided_layout).lower(state_shapes).compile()
+        state_with_dll_auto_decided_layout = compiled_apply_layout(state)
+        # ForkedPdb().set_trace()
+        print("apply_layout output format for state['embedder']['input_embedding_table_VD']: ", compiled_apply_layout.output_formats['embedder']['input_embedding_table_VD'].layout)
+        print("state_with_dll_auto_decided_layout['embedder']['input_embedding_table_VD'].format: ", state_with_dll_auto_decided_layout['embedder']['input_embedding_table_VD'].format)
+        # ForkedPdb().set_trace()
         
+
         # Call with real state
         runtime_args = args[:4] + args[5:]  # Exclude static arg at index 6
-        return compiled(graphdef, state, *runtime_args)
+        
+        return compiled(graphdef, state_with_dll_auto_decided_layout, *runtime_args)
 
     # @functools.partial(
     #     jax.jit,
