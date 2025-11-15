@@ -207,6 +207,17 @@ def _get_nnx_model(
                 use_qwix_on_abstract_model=should_apply_qwix_on_abstract_model)
     return jit_model
 
+from jax._src.tree_util import DictKey, GetAttrKey
+
+def jax_path_to_simple_path(path):
+    res = []
+    if not path:
+        return res
+    for part in path:
+        if isinstance(part, DictKey):
+            res.append(part.key)
+    return res
+
 
 # TODO(pooyam): We need to refactor this. This is returning a bunch of functions that do not work with all models and this is not very easy to see from the code.
 def get_flax_model(
@@ -265,6 +276,7 @@ def get_flax_model(
     )
     
     def run_model(graphdef, state, *args):
+        print("run_model called!")
         @functools.partial(
             jax.jit,
             # Args layout (positional indices for run_model_base):
@@ -295,67 +307,65 @@ def get_flax_model(
         # Compile with ShapeDtypeStruct for state to infer layouts
         compiled = run_model_base.lower(graphdef, state_shapes, *args).compile()
 
-        original_layout = state_shardings_default_layout['embedder']['input_embedding_table_VD']
-        dll_auto_decided_layout = compiled.input_formats[0][1]['embedder']['input_embedding_table_VD']
-        shape = state_shapes['embedder']['input_embedding_table_VD']
-        compiled_apply_layout = jax.jit(apply_layout, in_shardings=(original_layout,), out_shardings=dll_auto_decided_layout).lower(shape).compile()
-        shape_with_dll_auto_decided_layout = compiled_apply_layout(state['embedder']['input_embedding_table_VD'])
-        state['embedder']['input_embedding_table_VD'] = shape_with_dll_auto_decided_layout
-        # ForkedPdb().set_trace()
-        print("dll_auto_decided_layout for state['embedder']['input_embedding_table_VD']: ",  dll_auto_decided_layout)
-        print("apply_layout output format for state['embedder']['input_embedding_table_VD']: ", compiled_apply_layout.output_formats.layout)
-        print("shape_with_dll_auto_decided_layout: ", shape_with_dll_auto_decided_layout.format)
-        
-        original_layout = state_shardings_default_layout['layers'][0]['custom_module']['mlp1_bias_EF2']
-        dll_auto_decided_layout = compiled.input_formats[0][1]['layers'][0]['custom_module']['mlp1_bias_EF2']
-        shape = state_shapes['layers'][0]['custom_module']['mlp1_bias_EF2']
-        compiled_apply_layout = jax.jit(apply_layout, in_shardings=(original_layout,), out_shardings=dll_auto_decided_layout).lower(shape).compile()
-        shape_with_dll_auto_decided_layout = compiled_apply_layout(state['layers'][0]['custom_module']['mlp1_bias_EF2'])
-        state['layers'][0]['custom_module']['mlp1_bias_EF2'] = shape_with_dll_auto_decided_layout
+        # Helper to walk nested dict-like structures
+        def _get_nested(container, path):
+            cur = container
+            for p in path:
+                cur = cur[p]
+            return cur
 
-        original_layout = state_shardings_default_layout['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['qvalue']
-        dll_auto_decided_layout = compiled.input_formats[0][1]['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['qvalue']
-        shape = state_shapes['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['qvalue']
-        compiled_apply_layout = jax.jit(apply_layout, in_shardings=(original_layout,), out_shardings=dll_auto_decided_layout).lower(shape).compile()
-        shape_with_dll_auto_decided_layout = compiled_apply_layout(state['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['qvalue'])
-        state['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['qvalue'] = shape_with_dll_auto_decided_layout
+        def _set_nested(container, path, value):
+            cur = container
+            for p in path[:-1]:
+                cur = cur[p]
+            cur[path[-1]] = value
 
-        original_layout = state_shardings_default_layout['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['scale']
-        dll_auto_decided_layout = compiled.input_formats[0][1]['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['scale']
-        shape = state_shapes['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['scale']
-        compiled_apply_layout = jax.jit(apply_layout, in_shardings=(original_layout,), out_shardings=dll_auto_decided_layout).lower(shape).compile()
-        shape_with_dll_auto_decided_layout = compiled_apply_layout(state['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['scale'])
-        state['layers'][0]['custom_module']['mlp2_weight_EFD']['array']['scale'] = shape_with_dll_auto_decided_layout
+        # Generic function to apply DLL-decided layout for a given state path.
+        def _apply_path_layout(path):
+            try:
+                original_layout = _get_nested(state_shardings_default_layout, path)
+                dll_auto_decided_layout = _get_nested(compiled.input_formats[0][1], path)
+                shape = _get_nested(state_shapes, path)
+                # Skip if layouts are not present
+                if original_layout is None or dll_auto_decided_layout is None:
+                    logger.debug(f"Skipping layout application for {path}: missing layout info")
+                    return
+                compiled_apply_layout = jax.jit(apply_layout,
+                                               in_shardings=(original_layout,),
+                                               out_shardings=dll_auto_decided_layout).lower(shape).compile()
+                state_value = _get_nested(state, path)
+                shape_with_dll_auto_decided_layout = compiled_apply_layout(state_value)
+                _set_nested(state, path, shape_with_dll_auto_decided_layout)
+                logger.debug(f"Applied DLL layout for {path}: {dll_auto_decided_layout}")
+            except Exception as e:
+                # Be permissive: log and continue for missing keys or unexpected shapes.
+                logger.debug(f"Could not apply DLL layout for {path}: {e}")
 
-        original_layout = state_shardings_default_layout['layers'][1]['custom_module']['mlp1_bias_EF2']
-        dll_auto_decided_layout = compiled.input_formats[0][1]['layers'][1]['custom_module']['mlp1_bias_EF2']
-        shape = state_shapes['layers'][1]['custom_module']['mlp1_bias_EF2']
-        compiled_apply_layout = jax.jit(apply_layout, in_shardings=(original_layout,), out_shardings=dll_auto_decided_layout).lower(shape).compile()
-        shape_with_dll_auto_decided_layout = compiled_apply_layout(state['layers'][1]['custom_module']['mlp1_bias_EF2'])
-        state['layers'][1]['custom_module']['mlp1_bias_EF2'] = shape_with_dll_auto_decided_layout
+        # List of state paths to transform. Added the additional entries you requested.
+        path_and_values = jax.tree.leaves_with_path(state)
+        transform_paths = [path for path, _ in path_and_values]
+        transform_paths = [jax_path_to_simple_path(p) for p in transform_paths]
+        print("transform_paths: ", transform_paths)
+        # transform_paths = [
+        #     ["embedder", "input_embedding_table_VD"],
+        #     ["layers", 0, "custom_module", "mlp1_bias_EF2"],
+        #     ["layers", 0, "custom_module", "mlp2_weight_EFD", "array", "qvalue"],
+        #     ["layers", 0, "custom_module", "mlp2_weight_EFD", "array", "scale"],
+        #     ["layers", 1, "custom_module", "mlp1_bias_EF2"],
+        #     ["layers", 1, "custom_module", "mlp2_weight_EFD", "array", "qvalue"],
+        #     ["layers", 1, "custom_module", "mlp2_weight_EFD", "array", "scale"],
+        #     ["layers", 2, "custom_module", "mlp1_bias_EF2"],
+        #     # Newly added transforms from your request:
+        #     ["layers", 2, "custom_module", "mlp2_weight_EFD", "array", "qvalue"],
+        #     ["layers", 2, "custom_module", "mlp2_weight_EFD", "array", "scale"],
+        #     ["layers", 3, "custom_module", "mlp1_bias_EF2"],
+        #     ["layers", 3, "custom_module", "mlp2_weight_EFD", "array", "qvalue"],
+        #     ["layers", 3, "custom_module", "mlp2_weight_EFD", "array", "scale"],
+        #     # ... you can append more paths here as needed ...
+        # ]
 
-        original_layout = state_shardings_default_layout['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['qvalue']
-        dll_auto_decided_layout = compiled.input_formats[0][1]['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['qvalue']
-        shape = state_shapes['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['qvalue']
-        compiled_apply_layout = jax.jit(apply_layout, in_shardings=(original_layout,), out_shardings=dll_auto_decided_layout).lower(shape).compile()
-        shape_with_dll_auto_decided_layout = compiled_apply_layout(state['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['qvalue'])
-        state['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['qvalue'] = shape_with_dll_auto_decided_layout
-
-        original_layout = state_shardings_default_layout['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['scale']
-        dll_auto_decided_layout = compiled.input_formats[0][1]['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['scale']
-        shape = state_shapes['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['scale']
-        compiled_apply_layout = jax.jit(apply_layout, in_shardings=(original_layout,), out_shardings=dll_auto_decided_layout).lower(shape).compile()
-        shape_with_dll_auto_decided_layout = compiled_apply_layout(state['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['scale'])
-        state['layers'][1]['custom_module']['mlp2_weight_EFD']['array']['scale'] = shape_with_dll_auto_decided_layout
-
-        original_layout = state_shardings_default_layout['layers'][2]['custom_module']['mlp1_bias_EF2']
-        dll_auto_decided_layout = compiled.input_formats[0][1]['layers'][2]['custom_module']['mlp1_bias_EF2']
-        shape = state_shapes['layers'][2]['custom_module']['mlp1_bias_EF2']
-        compiled_apply_layout = jax.jit(apply_layout, in_shardings=(original_layout,), out_shardings=dll_auto_decided_layout).lower(shape).compile()
-        shape_with_dll_auto_decided_layout = compiled_apply_layout(state['layers'][2]['custom_module']['mlp1_bias_EF2'])
-        state['layers'][2]['custom_module']['mlp1_bias_EF2'] = shape_with_dll_auto_decided_layout
-
-
+        for p in transform_paths:
+            _apply_path_layout(p)
 
         # Call with real state
         runtime_args = args[:4] + args[5:]  # Exclude static arg at index 6
